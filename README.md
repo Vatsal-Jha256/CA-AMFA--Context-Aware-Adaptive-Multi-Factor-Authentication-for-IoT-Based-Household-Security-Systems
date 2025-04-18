@@ -115,12 +115,6 @@ python test.py
    - OTP verification (generate during registration, verify during login)
    - Facial recognition (capture from Pi Camera, processed on connected PC)
 
-## Paper
-
-For detailed information about the system design, algorithms, and evaluation, please refer to our paper:
-
-"CA-AMFA: Context-Aware Adaptive Multi-Factor Authentication for IoT-Based Household Security Systems"
-
 ## License
 
 [MIT License](LICENSE) 
