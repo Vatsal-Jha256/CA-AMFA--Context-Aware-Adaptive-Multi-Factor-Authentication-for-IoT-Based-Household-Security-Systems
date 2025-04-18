@@ -1,0 +1,13 @@
+RPi.GPIO
+adafruit-circuitpython-ssd1306
+Pillow
+paho-mqtt
+psutil
+opencv-python
+mediapipe-rpi3
+bcrypt
+pyotp
+numpy
+pandas
+matplotlib
+seaborn
