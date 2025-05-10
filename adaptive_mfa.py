@@ -34,7 +34,7 @@ logger = logging.getLogger("AdaptiveMFA")
 class AdaptiveMFA:
     """Main class for adaptive multi-factor authentication"""
     
-    def __init__(self, hardware_controller, low_threshold=0.3, high_threshold=0.7, db_path="security_system.db"):
+    def __init__(self, hardware_controller, low_threshold=0.3, high_threshold=0.53, db_path="security_system.db"):
         self.hardware = hardware_controller
         self.low_threshold = low_threshold
         self.high_threshold = high_threshold
