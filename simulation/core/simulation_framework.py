@@ -9,6 +9,7 @@ import random
 import pickle
 import time
 import json
+import scipy.stats as stats
 from tqdm import tqdm
 from collections import defaultdict
 
@@ -22,8 +23,13 @@ from ContextualBandits.UCBBandit import UCBBandit
 os.makedirs("simulation_results", exist_ok=True)
 os.makedirs("simulation_models", exist_ok=True)
 os.makedirs("simulation_graphs", exist_ok=True)
+os.makedirs("simulation_runs", exist_ok=True)  # New directory for multiple runs
 
-
+# Function to set reproducible seeds
+def set_seed(seed):
+    """Set seeds for reproducibility across all random number generators"""
+    random.seed(seed)
+    np.random.seed(seed)
 
 class SimulatedRiskFactor(RiskFactor):
     """Enhanced risk factor for simulation purposes with phase shifts and seasonality"""
@@ -476,8 +482,28 @@ class SecuritySimulator:
 class SimulationFramework:
     """Enhanced simulation framework to better demonstrate adaptive vs fixed methods"""
     
-    def __init__(self, days_to_simulate=30, low_threshold=0.3, high_threshold=0.53):
+    def __init__(self, days_to_simulate=30, low_threshold=0.3, high_threshold=0.53, seed=42, num_runs=1, confidence_level=0.95):
+        """
+        Initialize the simulation framework
+        
+        Args:
+            days_to_simulate: Number of days to simulate
+            low_threshold: Threshold for low risk
+            high_threshold: Threshold for high risk
+            seed: Random seed for reproducibility (base seed if multiple runs)
+            num_runs: Number of simulation runs to average results
+            confidence_level: Confidence level for statistical intervals (0.95 = 95%)
+        """
         self.days_to_simulate = days_to_simulate
+        self.seed = seed
+        self.num_runs = num_runs
+        self.confidence_level = confidence_level
+        
+        # Set initial seed
+        set_seed(seed)
+        
+        # Store the specific seeds used for each run
+        self.seeds_used = [seed + i for i in range(num_runs)]
         
         # Different thresholds for fixed vs adaptive to highlight differences
         self.thresholds = {
@@ -488,20 +514,21 @@ class SimulationFramework:
         }
         
         # Initialize components
-        self.user_simulator = UserSimulator(user_count=50, attack_probability=0.15)  # Increased from 0.08
-        self.security_simulator = SecuritySimulator(factor_drift_rate=0.02)  # Increased from 0.01
+        self.user_simulator = UserSimulator(user_count=50, attack_probability=0.15)
+        self.security_simulator = SecuritySimulator(factor_drift_rate=0.02)
         
         # Set up factor names for bandits
         self.factor_names = list(self.security_simulator.risk_factors.keys())
         
         # Initialize bandits with better exploration parameters
         self.bandits = {
-            "epsilon_greedy": self._create_bandit(EpsilonGreedyBandit, epsilon=0.2),  # Increased from 0.15
+            "epsilon_greedy": self._create_bandit(EpsilonGreedyBandit, epsilon=0.2),
             "thompson": self._create_bandit(ThompsonSamplingBandit),
-            "ucb": self._create_bandit(UCBBandit, confidence=1.5)  # Added confidence parameter
+            "ucb": self._create_bandit(UCBBandit, confidence=1.5)
         }
         
-        # Metrics storage
+        # Metrics storage for each run and consolidated results
+        self.all_runs_metrics = []
         self.metrics = {
             "fixed": defaultdict(list),
             "epsilon_greedy": defaultdict(list),
@@ -545,11 +572,22 @@ class SimulationFramework:
         self.timestamps = []
         
         # Inject more frequent and more extreme environment changes
-        self.environment_change_days = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]  # More frequent changes
+        self.environment_change_days = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
         self.environment_state = "normal"
         
         # Track current day for simulation
         self.current_day = 0
+        
+        # Store consolidated results across runs
+        self.consolidated_results = None
+        
+        # Store raw results from each run for statistical analysis
+        self.raw_run_results = {
+            "fixed": {},
+            "epsilon_greedy": {},
+            "thompson": {},
+            "ucb": {}
+        }
 
     def _create_bandit(self, bandit_class, **kwargs):
         """Create a new bandit with configurable parameters"""
@@ -1010,8 +1048,16 @@ class SimulationFramework:
             
         return results
     
-    def save_results(self, results):
+    def save_results(self, results=None):
         """Save simulation results to file"""
+        # If no results provided, use the calculated metrics
+        if results is None:
+            results = self.calculate_final_metrics()
+            
+        # For multiple runs, save the consolidated results if available
+        if self.num_runs > 1 and self.consolidated_results:
+            results = self.consolidated_results
+        
         # Convert results to DataFrame
         methods = list(results.keys())
         metrics = list(results[methods[0]].keys())
@@ -1064,19 +1110,331 @@ class SimulationFramework:
                 })
                 df.to_csv(f"simulation_results/{method}_{factor}_values.csv", index=False)
     
-    def generate_graphs(self, results_df):
+    def generate_graphs(self, results_df=None):
         """Generate analysis graphs using the visualization module"""
         from simulation.core.visualization import generate_all_visualizations
+        
+        # If no results provided, use saved metrics
+        if results_df is None:
+            if self.num_runs > 1 and self.consolidated_results:
+                results = self.consolidated_results
+            else:
+                results = self.calculate_final_metrics()
+        else:
+            # Convert DataFrame back to dictionary if needed
+            results = {}
+            for _, row in results_df.iterrows():
+                method = row['Method']
+                results[method] = row.drop('Method').to_dict()
         
         # Get environments for plotting
         environments = [env[4:] for env in self.metrics["fixed"].keys() if env.startswith('env_')]
         
-        # Generate all visualizations
+        # Generate all visualizations with run information
         generate_all_visualizations(
-            results=self.calculate_final_metrics(),
+            results=results,
             auth_decisions=self.auth_decisions,
             weight_history=self.weight_history,
             factor_names=self.factor_names,
             metrics=self.metrics,
-            environments=environments
+            environments=environments,
+            num_runs=self.num_runs,
+            seed=self.seed
         )
+
+    def run_multiple_simulations(self):
+        """Run multiple simulations with different seeds and average the results"""
+        print(f"Running {self.num_runs} simulation runs with seeds {self.seeds_used[0]} to {self.seeds_used[-1]}...")
+        
+        # Reset stored metrics for multiple runs
+        self.all_runs_metrics = []
+        
+        # Clear raw results storage
+        for method in self.raw_run_results:
+            self.raw_run_results[method] = {}
+        
+        for run_idx, run_seed in enumerate(self.seeds_used):
+            print(f"\n--- Starting Simulation Run {run_idx+1}/{self.num_runs} (seed: {run_seed}) ---")
+            
+            # Set the seed for this run
+            set_seed(run_seed)
+            
+            # Reset metrics and history for this run
+            self._reset_metrics_and_history()
+            
+            # Run the simulation
+            self.run_simulation()
+            
+            # Calculate metrics for this run
+            run_results = self.calculate_final_metrics()
+            
+            # Store the metrics for this run
+            self.all_runs_metrics.append(run_results)
+            
+            # Store raw results for each metric and method
+            for method, metrics in run_results.items():
+                for metric, value in metrics.items():
+                    if metric not in self.raw_run_results[method]:
+                        self.raw_run_results[method][metric] = []
+                    self.raw_run_results[method][metric].append(value)
+            
+            # Save individual run results
+            run_df = pd.DataFrame(run_results).transpose()
+            run_df.to_csv(f"simulation_runs/run_{run_idx+1}_seed_{run_seed}_metrics.csv")
+            
+        # Consolidate results across all runs
+        self.consolidate_results()
+        
+        return self.consolidated_results
+    
+    def _reset_metrics_and_history(self):
+        """Reset metrics and history tracking for a new simulation run"""
+        # Reset metrics
+        self.metrics = {
+            "fixed": defaultdict(list),
+            "epsilon_greedy": defaultdict(list),
+            "thompson": defaultdict(list),
+            "ucb": defaultdict(list)
+        }
+        
+        # Reset weight history
+        self.weight_history = {
+            "fixed": defaultdict(list),
+            "epsilon_greedy": defaultdict(list),
+            "thompson": defaultdict(list),
+            "ucb": defaultdict(list)
+        }
+        
+        # Reset factor history
+        self.factor_history = {
+            "fixed": defaultdict(list),
+            "epsilon_greedy": defaultdict(list),
+            "thompson": defaultdict(list),
+            "ucb": defaultdict(list)
+        }
+        
+        # Reset auth decisions
+        self.auth_decisions = {
+            "fixed": [],
+            "epsilon_greedy": [],
+            "thompson": [],
+            "ucb": []
+        }
+        
+        # Reset attack performance
+        self.attack_performance = {
+            "fixed": defaultdict(list),
+            "epsilon_greedy": defaultdict(list),
+            "thompson": defaultdict(list),
+            "ucb": defaultdict(list)
+        }
+        
+        # Reset environment state
+        self.environment_state = "normal"
+        
+        # Reset timestamps
+        self.timestamps = []
+        
+        # Reset current day
+        self.current_day = 0
+        
+        # Reset simulators
+        self.user_simulator = UserSimulator(user_count=50, attack_probability=0.15)
+        self.security_simulator = SecuritySimulator(factor_drift_rate=0.02)
+        
+    def consolidate_results(self):
+        """Consolidate results across multiple runs by averaging and calculating statistics"""
+        if not self.all_runs_metrics:
+            print("No runs to consolidate")
+            return None
+            
+        print("Consolidating results across runs...")
+        
+        # Initialize consolidated results
+        consolidated = {}
+        
+        # Get all methods and metrics
+        methods = self.all_runs_metrics[0].keys()
+        
+        for method in methods:
+            consolidated[method] = {}
+            metrics = self.all_runs_metrics[0][method].keys()
+            
+            for metric in metrics:
+                # Extract this metric for all runs
+                values = [run[method][metric] for run in self.all_runs_metrics]
+                
+                # Calculate mean and standard deviation
+                mean_value = np.mean(values)
+                std_value = np.std(values, ddof=1)  # Sample standard deviation
+                
+                # Calculate confidence interval using t-distribution
+                if self.num_runs > 1:
+                    t_critical = stats.t.ppf((1 + self.confidence_level) / 2, self.num_runs - 1)
+                    margin_of_error = t_critical * (std_value / np.sqrt(self.num_runs))
+                    ci_lower = mean_value - margin_of_error
+                    ci_upper = mean_value + margin_of_error
+                else:
+                    ci_lower = mean_value
+                    ci_upper = mean_value
+                
+                # Store statistics
+                consolidated[method][metric] = mean_value
+                consolidated[method][f"{metric}_std"] = std_value
+                consolidated[method][f"{metric}_ci_lower"] = ci_lower
+                consolidated[method][f"{metric}_ci_upper"] = ci_upper
+        
+        # Add statistical significance tests comparing methods
+        if self.num_runs > 1:
+            baseline_method = "fixed"  # Use fixed as baseline for comparisons
+            self._add_statistical_tests(consolidated, baseline_method)
+        
+        self.consolidated_results = consolidated
+        
+        # Save consolidated results
+        self._save_consolidated_results()
+        
+        return consolidated
+        
+    def _add_statistical_tests(self, consolidated, baseline_method):
+        """Add statistical significance test results between methods"""
+        methods = list(self.raw_run_results.keys())
+        
+        # Skip if baseline method is not in the results
+        if baseline_method not in methods:
+            return
+            
+        # Choose key metrics for statistical testing
+        key_metrics = ['accuracy', 'f1_score', 'far', 'frr', 'eer', 'avg_auth_factors']
+        
+        for method in methods:
+            if method == baseline_method:
+                continue
+                
+            for metric in key_metrics:
+                if metric not in self.raw_run_results[baseline_method] or metric not in self.raw_run_results[method]:
+                    continue
+                    
+                baseline_values = self.raw_run_results[baseline_method][metric]
+                method_values = self.raw_run_results[method][metric]
+                
+                # Skip if we don't have enough samples
+                if len(baseline_values) < 2 or len(method_values) < 2:
+                    continue
+                
+                # Perform paired t-test (if we have the same number of runs)
+                if len(baseline_values) == len(method_values):
+                    t_stat, p_value = stats.ttest_rel(method_values, baseline_values)
+                    
+                    # Store p-value and significance indicator
+                    consolidated[method][f"{metric}_p_value"] = p_value
+                    consolidated[method][f"{metric}_significant"] = p_value < 0.05
+                    
+                    # Calculate effect size (Cohen's d for paired samples)
+                    diff = np.array(method_values) - np.array(baseline_values)
+                    effect_size = np.mean(diff) / np.std(diff, ddof=1) if np.std(diff, ddof=1) > 0 else 0
+                    consolidated[method][f"{metric}_effect_size"] = effect_size
+
+    def _save_consolidated_results(self):
+        """Save consolidated results to file"""
+        if not self.consolidated_results:
+            return
+            
+        # Convert to DataFrame
+        data = []
+        for method, metrics in self.consolidated_results.items():
+            row = {'Method': method}
+            row.update(metrics)
+            data.append(row)
+            
+        df = pd.DataFrame(data)
+        
+        # Save to CSV
+        df.to_csv("simulation_results/consolidated_metrics.csv", index=False)
+        
+        # Create a summary with means and confidence intervals
+        summary_data = []
+        # Extract the main metrics (without additional statistics)
+        main_metrics = [col for col in df.columns if 
+                       not col.endswith('_std') and 
+                       not col.endswith('_ci_lower') and
+                       not col.endswith('_ci_upper') and
+                       not col.endswith('_p_value') and
+                       not col.endswith('_significant') and
+                       not col.endswith('_effect_size') and
+                       col != 'Method']
+        
+        for method in df['Method'].unique():
+            method_data = df[df['Method'] == method]
+            row = {'Method': method}
+            
+            for metric in main_metrics:
+                mean_value = method_data[metric].values[0]
+                
+                # Include confidence interval if available
+                if f"{metric}_ci_lower" in method_data.columns and f"{metric}_ci_upper" in method_data.columns:
+                    ci_lower = method_data[f"{metric}_ci_lower"].values[0]
+                    ci_upper = method_data[f"{metric}_ci_upper"].values[0]
+                    row[f"{metric}"] = f"{mean_value:.4f} [{ci_lower:.4f}, {ci_upper:.4f}]"
+                # Fall back to standard deviation if CI not available    
+                elif f"{metric}_std" in method_data.columns:
+                    std_value = method_data[f"{metric}_std"].values[0]
+                    row[f"{metric}"] = f"{mean_value:.4f} ± {std_value:.4f}"
+                else:
+                    row[f"{metric}"] = f"{mean_value:.4f}"
+                
+                # Add significance marker if available
+                if f"{metric}_significant" in method_data.columns and method_data[f"{metric}_significant"].values[0]:
+                    row[f"{metric}"] += " *"
+            
+            summary_data.append(row)
+            
+        summary_df = pd.DataFrame(summary_data)
+        summary_df.to_csv("simulation_results/results_summary.csv", index=False)
+        
+        # Save a separate table with statistical significance details
+        if self.num_runs > 1:
+            stat_data = []
+            for method in df['Method'].unique():
+                if method == "fixed":  # Skip baseline method
+                    continue
+                    
+                method_data = df[df['Method'] == method]
+                row = {'Method': method}
+                
+                for metric in main_metrics:
+                    # Add p-value and effect size if available
+                    if f"{metric}_p_value" in method_data.columns:
+                        p_value = method_data[f"{metric}_p_value"].values[0]
+                        row[f"{metric}_p_value"] = f"{p_value:.4f}"
+                        
+                        # Add significance stars
+                        if p_value < 0.001:
+                            row[f"{metric}_significance"] = "***"
+                        elif p_value < 0.01:
+                            row[f"{metric}_significance"] = "**"
+                        elif p_value < 0.05:
+                            row[f"{metric}_significance"] = "*"
+                        else:
+                            row[f"{metric}_significance"] = "ns"
+                    
+                    if f"{metric}_effect_size" in method_data.columns:
+                        effect_size = method_data[f"{metric}_effect_size"].values[0]
+                        row[f"{metric}_effect_size"] = f"{effect_size:.4f}"
+                
+                stat_data.append(row)
+                
+            if stat_data:
+                stat_df = pd.DataFrame(stat_data)
+                stat_df.to_csv("simulation_results/statistical_significance.csv", index=False)
+    
+    def get_reproducibility_info(self):
+        """Get reproducibility information for reporting"""
+        info = {
+            "base_seed": self.seed,
+            "num_runs": self.num_runs,
+            "seeds_used": self.seeds_used,
+            "confidence_level": self.confidence_level,
+            "days_simulated": self.days_to_simulate
+        }
+        return info

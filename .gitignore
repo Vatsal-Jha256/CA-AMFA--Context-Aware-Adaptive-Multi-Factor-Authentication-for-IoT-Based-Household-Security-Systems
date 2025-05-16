@@ -3,3 +3,12 @@
 *.log
 __pycache__/
 .history/
+*.pkl
+main_original.tex
+main.tex
+references.bib
+models/
+simulation_graphs/
+simulation_results/
+simulation_runs/
+simulation_models/

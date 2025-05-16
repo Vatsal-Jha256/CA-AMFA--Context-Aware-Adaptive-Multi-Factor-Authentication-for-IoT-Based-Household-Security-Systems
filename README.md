@@ -1,7 +1,23 @@
 # CA-AMFA: Context-Aware Adaptive Multi-Factor Authentication for IoT-Based Household Security Systems
 
 This repository contains the implementation of a Context-Aware Adaptive Multi-Factor Authentication (CA-AMFA) system for IoT-based household security systems. The system dynamically adjusts authentication requirements based on risk assessment using contextual bandit algorithms.
+# Basic run with reproducible seed
+python run_simulation.py --seed 42
 
+# Multiple runs with default seed increment
+python run_simulation.py --runs 10 --seed 42
+
+# Use specific seeds for reproducibility
+python run_simulation.py --seed_list "42,123,456,789,1010" 
+
+# Set confidence level for statistical intervals (default 0.95)
+python run_simulation.py --runs 10 --confidence 0.99
+
+# Generate boxplots to visualize variability
+python run_simulation.py --runs 10 --boxplots
+
+# Compare against a different baseline method
+python run_simulation.py --runs 10 --compare_with thompson
 ## Overview
 
 The CA-AMFA system leverages a set of risk factors including time-based patterns, user behavior, network conditions, motion detection, and failed login attempts to calculate a risk score. Based on this score, it dynamically selects the appropriate authentication methods (password, OTP, facial recognition) to balance security and usability.
